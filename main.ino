@@ -20,7 +20,7 @@ uint8_t collected_data[16] = {0};
 #define OTAA_APPKEY {0x42, 0x44, 0x29, 0x89, 0x59, 0x3B, 0x50, 0xBA, 0x0B, 0x72, 0xFB, 0x50, 0x86, 0x2A, 0x10, 0x63}
 
 // Debug flag
-const bool DEBUG = true;  // Set to false to disable debug output
+const bool ENABLE_DEBUG = true;  // Set to false to disable debug output
 
 void recvCallback(SERVICE_LORA_RECEIVE_T * data)
 {
@@ -80,38 +80,38 @@ void sendCallback(int32_t status)
 
 void sensor_handler(void *)
 {
-    if (DEBUG) Serial.println("\n--- Wake up - Starting new measurement cycle ---");
+    if (ENABLE_DEBUG) Serial.println("\n--- Wake up - Starting new measurement cycle ---");
     digitalWrite(LED_PIN, HIGH);
 
     // Check if we're joined to the network
     if (!api.lorawan.njs.get()) {
-        if (DEBUG) Serial.println("Not joined, skip sending");
+        if (ENABLE_DEBUG) Serial.println("Not joined, skip sending");
         return;
     }
 
     uint8_t data_len = 0;
 
     // VL53L1X operations
-    if (DEBUG) {
+    if (ENABLE_DEBUG) {
         Serial.println("\nTOF Sensor Operations:");
         Serial.println("1. Stopping previous ranging...");
     }
     vl53.stopRanging();  // Stop any ongoing ranging
     delay(50);           // Give sensor time to stop
     
-    if (DEBUG) Serial.println("2. Clearing interrupts and starting new ranging...");
+    if (ENABLE_DEBUG) Serial.println("2. Clearing interrupts and starting new ranging...");
     vl53.clearInterrupt();  // Clear any pending interrupts
     vl53.startRanging();    // Start fresh ranging
     
     // Wait for fresh data (with timeout)
-    if (DEBUG) Serial.println("3. Waiting for fresh data...");
+    if (ENABLE_DEBUG) Serial.println("3. Waiting for fresh data...");
     uint32_t start = millis();
     bool validReading = false;
     while ((millis() - start) < 1000) { // Increased timeout to 1000ms
         if (vl53.dataReady()) {
             int16_t distance = vl53.distance();
             if (distance != -1) {
-                if (DEBUG) {
+                if (ENABLE_DEBUG) {
                     Serial.println("4. Fresh data received:");
                     Serial.printf("   - Distance: %d mm\n", distance);
                     Serial.printf("   - Time taken: %lu ms\n", millis() - start);
@@ -119,7 +119,7 @@ void sensor_handler(void *)
                 collected_data[data_len++] = (distance >> 8) & 0xFF;
                 collected_data[data_len++] = distance & 0xFF;
                 validReading = true;
-            } else if (DEBUG) {
+            } else if (ENABLE_DEBUG) {
                 Serial.println("   - Invalid distance reading (-1)");
             }
             vl53.clearInterrupt();
@@ -129,11 +129,11 @@ void sensor_handler(void *)
     }
     vl53.stopRanging();
     
-    if (!validReading && DEBUG) {
+    if (!validReading && ENABLE_DEBUG) {
         Serial.println("Failed to get valid TOF reading - Timeout occurred");
     }
 
-    if (DEBUG) Serial.println("\nAHT20 Sensor Operations:");
+    if (ENABLE_DEBUG) Serial.println("\nAHT20 Sensor Operations:");
 
     // AHT20 operations - Already gets fresh readings by design
     sensors_event_t humidity, temp;
@@ -146,29 +146,29 @@ void sensor_handler(void *)
         collected_data[data_len++] = (hum_scaled >> 8) & 0xFF;
         collected_data[data_len++] = hum_scaled & 0xFF;
 
-        if (DEBUG) {
+        if (ENABLE_DEBUG) {
             Serial.println("Temperature and Humidity readings:");
             Serial.printf("   - Temperature: %.1f °C\n", temp.temperature);
             Serial.printf("   - Humidity: %.1f %%\n", humidity.relative_humidity);
         }
-    } else if (DEBUG) {
+    } else if (ENABLE_DEBUG) {
         Serial.println("Failed to read AHT20 sensor");
     }
 
     // Send the packet
-    if (DEBUG) Serial.println("\nLoRaWAN Operations:");
+    if (ENABLE_DEBUG) Serial.println("\nLoRaWAN Operations:");
     if (api.lorawan.send(data_len, collected_data, 2, false, 1)) {
-        if (DEBUG) {
+        if (ENABLE_DEBUG) {
             Serial.println("Packet sent successfully");
             Serial.printf("Payload size: %d bytes\n", data_len);
         }
         tx_active = true;
     } else {
-        if (DEBUG) Serial.println("Failed to send message");
+        if (ENABLE_DEBUG) Serial.println("Failed to send message");
         tx_active = false;
     }
     
-    if (DEBUG) Serial.println("--- End of measurement cycle ---\n");
+    if (ENABLE_DEBUG) Serial.println("--- End of measurement cycle ---\n");
 }
 
 void setup()
