@@ -64,7 +64,7 @@ void joinCallback(int32_t status)
         
         // Start the periodic timer after successful join
         api.system.timer.create(RAK_TIMER_0, sensor_handler, RAK_TIMER_PERIODIC);
-        api.system.timer.start(RAK_TIMER_0, 10000, NULL);  // 10000 = 10 seconds
+        api.system.timer.start(RAK_TIMER_0, 30000, NULL);  // 10000 = 30 seconds
     } else {
         // If join failed, try again
         api.lorawan.join();
@@ -108,19 +108,19 @@ void sensor_handler(void *)
     
     uint32_t start = millis();
     bool validReading = false;
+    int16_t distance = 0;  // Default to 0 for invalid readings
+    
     while ((millis() - start) < 1000) {
         if (vl53.dataReady()) {
-            int16_t distance = vl53.distance();
+            distance = vl53.distance();
             if (distance != -1) {
                 if (ENABLE_DEBUG) {
                     Serial.printf("Distance: %d mm (read time: %lu ms)\n", 
                                 distance, millis() - start);
                 }
-                collected_data[data_len++] = (distance >> 8) & 0xFF;
-                collected_data[data_len++] = distance & 0xFF;
                 validReading = true;
             } else if (ENABLE_DEBUG) {
-                Serial.println("❌ Invalid distance reading (-1)");
+                Serial.println("❌ Invalid distance reading (-1), setting to 0 mm");
             }
             vl53.clearInterrupt();
             break;
@@ -129,9 +129,16 @@ void sensor_handler(void *)
     }
     vl53.stopRanging();
     
-    if (!validReading && ENABLE_DEBUG) {
-        Serial.println("❌ Failed to get valid TOF reading - Timeout occurred");
+    if (!validReading) {
+        if (ENABLE_DEBUG) {
+            Serial.println("❌ Failed to get valid TOF reading - Setting to 0 mm");
+        }
+        distance = 0;
     }
+    
+    // Store the distance value regardless of validity
+    collected_data[data_len++] = (distance >> 8) & 0xFF;
+    collected_data[data_len++] = distance & 0xFF;
 
     if (ENABLE_DEBUG) {
         Serial.println("\n🌡️ AHT20 SENSOR OPERATIONS");
