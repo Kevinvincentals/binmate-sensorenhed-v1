@@ -15,31 +15,35 @@ Adafruit_AHTX0 aht;
 // Data collection
 uint8_t collected_data[16] = {0};
 
-#define OTAA_DEVEUI {0x8E, 0x0A, 0x1F, 0x2D, 0x5A, 0x5A, 0x35, 0x56}
-#define OTAA_APPEUI {0xDD, 0x7C, 0x70, 0xAD, 0xF9, 0xDF, 0x07, 0x29}
-#define OTAA_APPKEY {0x64, 0x7B, 0x7D, 0x56, 0x37, 0x64, 0x76, 0xDE, 0x3D, 0x85, 0xB8, 0xF3, 0xBB, 0x5F, 0x3A, 0x8B}
+#define OTAA_DEVEUI {0x21, 0x56, 0xD0, 0x66, 0x4F, 0x99, 0x4E, 0xF8}
+#define OTAA_APPEUI {0x06, 0x8C, 0xFA, 0x32, 0x0E, 0x78, 0xE6, 0xBE}
+#define OTAA_APPKEY {0x42, 0x44, 0x29, 0x89, 0x59, 0x3B, 0x50, 0xBA, 0x0B, 0x72, 0xFB, 0x50, 0x86, 0x2A, 0x10, 0x63}
+
+// Debug flag
+const bool DEBUG = true;  // Set to false to disable debug output
 
 void recvCallback(SERVICE_LORA_RECEIVE_T * data)
 {
     if (data->BufferSize > 0) {
         Serial.println("Something received!");
         
-        // Convert received bytes to string
+        // Convert received bytes to string for easier comparison
         char hexStr[32] = {0};
         for (int i = 0; i < data->BufferSize; i++) {
             sprintf(hexStr + (i * 2), "%02x", data->Buffer[i]);
         }
         Serial.println(hexStr);
 
-        // Check if it starts with "s"
-        if (strncmp(hexStr, "73", 2) == 0) { // "s" in hex
-            // Extract the number after "s"
+        // Check if it starts with "sleep"
+        if (strncmp(hexStr, "736c656570", 10) == 0) { // "sleep" in hex
+            // Extract the ASCII numbers after "sleep"
             char numStr[4] = {0};
-            int numLen = (data->BufferSize - 1); // 1 is length of "s"
+            int numLen = (data->BufferSize - 5); // 5 is length of "sleep"
             if (numLen > 0 && numLen <= 3) {
-                memcpy(numStr, (char*)&data->Buffer[1], numLen);
-                long minutes = atol(numStr);
+                memcpy(numStr, (char*)&data->Buffer[5], numLen);
+                long minutes = atol(numStr);  // Convert ASCII to long
                 
+                // Update timer interval (convert minutes to milliseconds)
                 uint32_t interval = minutes * 60 * 1000;
                 api.system.timer.stop(RAK_TIMER_0);
                 api.system.timer.start(RAK_TIMER_0, interval, NULL);
@@ -60,7 +64,7 @@ void joinCallback(int32_t status)
         
         // Start the periodic timer after successful join
         api.system.timer.create(RAK_TIMER_0, sensor_handler, RAK_TIMER_PERIODIC);
-        api.system.timer.start(RAK_TIMER_0, 30000, NULL);  // 30000 = 30 seconds
+        api.system.timer.start(RAK_TIMER_0, 10000, NULL);  // 10000 = 10 seconds
     } else {
         // If join failed, try again
         api.lorawan.join();
@@ -76,31 +80,62 @@ void sendCallback(int32_t status)
 
 void sensor_handler(void *)
 {
-    Serial.println("Starting transmission");
+    if (DEBUG) Serial.println("\n--- Wake up - Starting new measurement cycle ---");
     digitalWrite(LED_PIN, HIGH);
 
     // Check if we're joined to the network
     if (!api.lorawan.njs.get()) {
-        Serial.println("Not joined, skip sending");
+        if (DEBUG) Serial.println("Not joined, skip sending");
         return;
     }
 
     uint8_t data_len = 0;
 
     // VL53L1X operations
-    vl53.startRanging();
-    if (vl53.dataReady()) {
-        int16_t distance = vl53.distance();
-        if (distance != -1) {
-            collected_data[data_len++] = (distance >> 8) & 0xFF;
-            collected_data[data_len++] = distance & 0xFF;
-            Serial.printf("Distance: %d mm\n", distance);
+    if (DEBUG) {
+        Serial.println("\nTOF Sensor Operations:");
+        Serial.println("1. Stopping previous ranging...");
+    }
+    vl53.stopRanging();  // Stop any ongoing ranging
+    delay(50);           // Give sensor time to stop
+    
+    if (DEBUG) Serial.println("2. Clearing interrupts and starting new ranging...");
+    vl53.clearInterrupt();  // Clear any pending interrupts
+    vl53.startRanging();    // Start fresh ranging
+    
+    // Wait for fresh data (with timeout)
+    if (DEBUG) Serial.println("3. Waiting for fresh data...");
+    uint32_t start = millis();
+    bool validReading = false;
+    while ((millis() - start) < 1000) { // Increased timeout to 1000ms
+        if (vl53.dataReady()) {
+            int16_t distance = vl53.distance();
+            if (distance != -1) {
+                if (DEBUG) {
+                    Serial.println("4. Fresh data received:");
+                    Serial.printf("   - Distance: %d mm\n", distance);
+                    Serial.printf("   - Time taken: %lu ms\n", millis() - start);
+                }
+                collected_data[data_len++] = (distance >> 8) & 0xFF;
+                collected_data[data_len++] = distance & 0xFF;
+                validReading = true;
+            } else if (DEBUG) {
+                Serial.println("   - Invalid distance reading (-1)");
+            }
+            vl53.clearInterrupt();
+            break;
         }
-        vl53.clearInterrupt();
+        delay(10);
     }
     vl53.stopRanging();
+    
+    if (!validReading && DEBUG) {
+        Serial.println("Failed to get valid TOF reading - Timeout occurred");
+    }
 
-    // AHT20 operations
+    if (DEBUG) Serial.println("\nAHT20 Sensor Operations:");
+
+    // AHT20 operations - Already gets fresh readings by design
     sensors_event_t humidity, temp;
     if (aht.getEvent(&humidity, &temp)) {
         int16_t temp_scaled = (int16_t)(temp.temperature * 10);
@@ -111,17 +146,29 @@ void sensor_handler(void *)
         collected_data[data_len++] = (hum_scaled >> 8) & 0xFF;
         collected_data[data_len++] = hum_scaled & 0xFF;
 
-        Serial.printf("Temp: %.1f °C, Humidity: %.1f %%\n", temp.temperature, humidity.relative_humidity);
+        if (DEBUG) {
+            Serial.println("Temperature and Humidity readings:");
+            Serial.printf("   - Temperature: %.1f °C\n", temp.temperature);
+            Serial.printf("   - Humidity: %.1f %%\n", humidity.relative_humidity);
+        }
+    } else if (DEBUG) {
+        Serial.println("Failed to read AHT20 sensor");
     }
 
     // Send the packet
+    if (DEBUG) Serial.println("\nLoRaWAN Operations:");
     if (api.lorawan.send(data_len, collected_data, 2, false, 1)) {
-        Serial.println("Packet sent");
+        if (DEBUG) {
+            Serial.println("Packet sent successfully");
+            Serial.printf("Payload size: %d bytes\n", data_len);
+        }
         tx_active = true;
     } else {
-        Serial.println("Failed to send message");
+        if (DEBUG) Serial.println("Failed to send message");
         tx_active = false;
     }
+    
+    if (DEBUG) Serial.println("--- End of measurement cycle ---\n");
 }
 
 void setup()
